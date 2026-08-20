@@ -1,0 +1,132 @@
+version: "3.8"
+
+services:
+  kafka:
+    image: apache/kafka:${KAFKA_VERSION:-4.3.1}
+    hostname: ${KAFKA_BROKER_HOSTNAME}
+    container_name: ${KAFKA_BROKER_CONTAINER_NAME}
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+    ports:
+      - "${KAFKA_BIND_ADDRESS:-0.0.0.0}:${KAFKA_EXTERNAL_PORT:-9092}:9092"
+
+    environment:
+      # KRaft identity
+      KAFKA_NODE_ID: 1
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID:?KAFKA_CLUSTER_ID is required}"
+
+      # Broker and controller roles
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+
+      # Listener configuration
+      KAFKA_LISTENERS: >-
+        CONTROLLER://0.0.0.0:29093,
+        INTERNAL://0.0.0.0:19092,
+        EXTERNAL://0.0.0.0:9092
+
+      KAFKA_ADVERTISED_LISTENERS: >-
+        INTERNAL://kafka:19092,
+        EXTERNAL://${KAFKA_EXTERNAL_HOST:?KAFKA_EXTERNAL_HOST is required}:${KAFKA_EXTERNAL_PORT:-9092}
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: >-
+        CONTROLLER:PLAINTEXT,
+        INTERNAL:PLAINTEXT,
+        EXTERNAL:PLAINTEXT
+
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      # Single-node settings
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+
+      # Operational settings
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "${KAFKA_AUTO_CREATE_TOPICS:-false}"
+      KAFKA_DELETE_TOPIC_ENABLE: "${KAFKA_DELETE_TOPIC_ENABLE:-false}"
+      KAFKA_LOG_RETENTION_HOURS: "${KAFKA_LOG_RETENTION_HOURS:-168}"
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_NUM_PARTITIONS: "${KAFKA_DEFAULT_PARTITIONS:-3}"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+
+      # JVM sizing
+      KAFKA_HEAP_OPTS: >-
+        -Xms${KAFKA_HEAP_MIN:-1G}
+        -Xmx${KAFKA_HEAP_MAX:-1G}
+
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+    networks:
+      - kafka-internal
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --list >/dev/null 2>&1"
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-20m}"
+        max-file: "${LOG_MAX_FILES:-5}"
+
+    security_opt:
+      - no-new-privileges:true
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:${KAFKA_UI_VERSION:-latest}
+    hostname: ${KAFKA_UI_HOSTNAME}
+    container_name: ${KAFKA_UI_CONTAINER_NAME}
+    restart: unless-stopped
+
+    profiles:
+      - admin
+
+    ports:
+      - "${KAFKA_UI_BIND_ADDRESS:-127.0.0.1}:${KAFKA_UI_PORT:-8088}:8080"
+
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "${KAFKA_CLUSTER_NAME:-production-kafka}"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+      DYNAMIC_CONFIG_ENABLED: "false"
+
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+    networks:
+      - kafka-internal
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-20m}"
+        max-file: "${LOG_MAX_FILES:-5}"
+
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  kafka-data:
+    name: "${KAFKA_DATA_VOLUME:-kafka-production-data}"
+
+networks:
+  kafka-internal:
+    name: kafka-internal
+    driver: bridge
+    internal: false
